@@ -1,0 +1,40 @@
+{
+  "displayName": "Homebridge Netatmo Weather",
+  "name": "homebridge-netatmo-weather",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Homebridge plugin that exposes a light sensor reflecting weather-based recommendations from a Netatmo weather scanner",
+  "author": "Remo Vetere <remo.vetere@gmail.com>",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/rocket-monkey/homebridge-netatmo-weather#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rocket-monkey/homebridge-netatmo-weather.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rocket-monkey/homebridge-netatmo-weather/issues"
+  },
+  "keywords": ["homebridge-plugin", "weather", "netatmo"],
+  "main": "dist/index.js",
+  "engines": {
+    "node": "^18.20.4 || ^20.12.2 || ^20.18.0 || ^22.10.0 || ^24.0.0",
+    "homebridge": "^1.8.0 || ^2.0.0-beta.0"
+  },
+  "scripts": {
+    "lint": "eslint src/**.ts --max-warnings=0",
+    "lint:fix": "eslint src/**.ts --fix",
+    "watch": "npm run build && npm link && nodemon",
+    "build": "rimraf ./dist && tsc"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/eslint__js": "^8.42.3",
+    "@types/node": "^22.13.4",
+    "eslint": "^9.20.1",
+    "homebridge": "^2.0.0-beta.0",
+    "nodemon": "^3.1.9",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0"
+  }
+}
