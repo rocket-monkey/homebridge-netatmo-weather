@@ -2,7 +2,7 @@
   "displayName": "Homebridge Netatmo Weather",
   "name": "homebridge-netatmo-weather",
   "type": "module",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Homebridge plugin that exposes a light sensor reflecting weather-based recommendations from a Netatmo weather scanner",
   "author": "Remo Vetere <remo.vetere@gmail.com>",
   "license": "Apache-2.0",
@@ -25,7 +25,8 @@
     "lint": "eslint src/**.ts --max-warnings=0",
     "lint:fix": "eslint src/**.ts --fix",
     "watch": "npm run build && npm link && nodemon",
-    "build": "rimraf ./dist && tsc"
+    "build": "rimraf ./dist && tsc",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
