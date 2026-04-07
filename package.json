@@ -2,7 +2,7 @@
   "displayName": "Homebridge Netatmo Weather",
   "name": "homebridge-netatmo-weather",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Homebridge plugin that exposes a light sensor reflecting weather-based recommendations from a Netatmo weather scanner",
   "author": "Remo Vetere <remo.vetere@gmail.com>",
   "license": "Apache-2.0",
@@ -15,6 +15,7 @@
     "url": "https://github.com/rocket-monkey/homebridge-netatmo-weather/issues"
   },
   "keywords": ["homebridge-plugin", "weather", "netatmo"],
+  "files": ["dist/"],
   "main": "dist/index.js",
   "engines": {
     "node": "^18.20.4 || ^20.12.2 || ^20.18.0 || ^22.10.0 || ^24.0.0",
