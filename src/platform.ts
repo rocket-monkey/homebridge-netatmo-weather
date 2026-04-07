@@ -8,18 +8,8 @@ import {
   Characteristic,
 } from "homebridge";
 
-import {
-  PLATFORM_NAME,
-  PLUGIN_NAME,
-  LUX_NONE,
-  LUX_WINTER_TILT,
-  LUX_SUMMER_AUTO,
-  DEFAULT_POLL_INTERVAL,
-  DEFAULT_HOT_THRESHOLD,
-  DEFAULT_LOOKAHEAD_HOURS,
-} from "./settings.js";
-
-import { WeatherService, BlindsRecommendation } from "./weatherService.js";
+import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLL_INTERVAL } from "./settings.js";
+import { WeatherService } from "./weatherService.js";
 
 export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -27,12 +17,10 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
 
   private readonly weatherService: WeatherService;
   private readonly pollInterval: number;
-  private readonly hotThreshold: number;
-  private readonly lookaheadHours: number;
 
   private accessory: PlatformAccessory | undefined;
   private lightSensorService: Service | undefined;
-  private currentLux: number = LUX_NONE;
+  private currentLux = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
@@ -48,15 +36,11 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.log.error("No weatherEndpoint configured — plugin will not start.");
       this.weatherService = new WeatherService("");
       this.pollInterval = 0;
-      this.hotThreshold = DEFAULT_HOT_THRESHOLD;
-      this.lookaheadHours = DEFAULT_LOOKAHEAD_HOURS;
       return;
     }
 
     this.weatherService = new WeatherService(endpoint);
     this.pollInterval = ((config.pollInterval as number) || DEFAULT_POLL_INTERVAL) * 60 * 1000;
-    this.hotThreshold = (config.hotThreshold as number) ?? DEFAULT_HOT_THRESHOLD;
-    this.lookaheadHours = (config.lookaheadHours as number) ?? DEFAULT_LOOKAHEAD_HOURS;
 
     this.api.on("didFinishLaunching", () => {
       this.setupAccessory();
@@ -79,13 +63,11 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.log.info("Registered new accessory: %s", name);
     }
 
-    // Accessory information
     this.accessory.getService(this.Service.AccessoryInformation)!
       .setCharacteristic(this.Characteristic.Manufacturer, "Netatmo Weather")
       .setCharacteristic(this.Characteristic.Model, "Light Sensor")
       .setCharacteristic(this.Characteristic.SerialNumber, "NW-001");
 
-    // Light sensor service
     this.lightSensorService =
       this.accessory.getService(this.Service.LightSensor) ||
       this.accessory.addService(this.Service.LightSensor, name);
@@ -94,28 +76,22 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       .getCharacteristic(this.Characteristic.CurrentAmbientLightLevel)
       .onGet(() => this.currentLux);
 
-    this.updateLux(LUX_NONE);
+    this.updateLux(0);
   }
 
   private async poll(): Promise<void> {
     try {
       const data = await this.weatherService.fetch();
-      const evaluation = this.weatherService.evaluate(data, this.hotThreshold, this.lookaheadHours);
+      const blindLux = data.blind_lux ?? 0;
 
-      this.log.info("[Weather] %s (outdoor: %.1f°C, sunny now: %s, sunny ahead: %s)",
-        evaluation.reason,
-        evaluation.temperature,
-        evaluation.isSunnyNow,
-        evaluation.isSunnyAhead,
+      this.log.info("[Weather] %s, %s°C, blind_lux: %s, lux: %s",
+        data.weather_today,
+        data.current.temperature.toFixed(1),
+        blindLux,
+        data.lux,
       );
 
-      const luxMap: Record<BlindsRecommendation, number> = {
-        none: LUX_NONE,
-        winter_tilt: LUX_WINTER_TILT,
-        summer_auto: LUX_SUMMER_AUTO,
-      };
-
-      this.updateLux(luxMap[evaluation.recommendation]);
+      this.updateLux(blindLux);
     } catch (err) {
       this.log.error("[Weather] Failed to fetch: %s", err);
     }
