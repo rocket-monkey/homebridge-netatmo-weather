@@ -18,11 +18,11 @@
         "description": "URL of the netatmo-scanner /weather endpoint"
       },
       "pollInterval": {
-        "title": "Poll Interval (minutes)",
+        "title": "Poll Interval (seconds)",
         "type": "integer",
-        "default": 30,
-        "minimum": 5,
-        "description": "How often to fetch weather data"
+        "default": 60,
+        "minimum": 15,
+        "description": "How often to fetch weather data, in seconds"
       }
     }
   }
