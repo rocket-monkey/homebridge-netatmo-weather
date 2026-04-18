@@ -2,7 +2,7 @@
   "displayName": "Homebridge Netatmo Weather",
   "name": "homebridge-netatmo-weather",
   "type": "module",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Homebridge plugin that exposes Netatmo Weather Station modules (indoor/outdoor temp, humidity, CO₂) plus a blind_lux recommendation sensor, all via cloud — no device-LAN reachability required",
   "author": "Remo Vetere <remo.vetere@gmail.com>",
   "license": "Apache-2.0",

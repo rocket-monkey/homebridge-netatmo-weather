@@ -1,3 +1,5 @@
+import * as http from "node:http";
+
 import {
   API,
   DynamicPlatformPlugin,
@@ -95,7 +97,41 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.setupOutdoorAccessory();
       this.poll();
       this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
+
+      const debugPort = Number(config.debugPort) || 0;
+      if (debugPort > 0) {
+        this.startDebugServer(debugPort);
+      }
     });
+  }
+
+  // Local-only HTTP endpoint for forcing characteristic values during
+  // HomeKit-automation debugging. Bound to 127.0.0.1 so it's only reachable
+  // from the same host running Homebridge.
+  //   curl -X POST 'http://127.0.0.1:<port>/lux?value=0'
+  private startDebugServer(port: number): void {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
+      if (req.method === "POST" && url.pathname === "/lux") {
+        const value = Number(url.searchParams.get("value"));
+        if (!Number.isFinite(value)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("bad or missing ?value=\n");
+          return;
+        }
+        this.updateLux(value);
+        this.log.warn("[Debug] Lux forced to %s via HTTP", value);
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end(`lux=${value}\n`);
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found\n");
+    });
+    server.on("error", (err) => this.log.error("[Debug] HTTP server error: %s", err));
+    server.listen(port, "127.0.0.1", () =>
+      this.log.warn("[Debug] HTTP server listening on 127.0.0.1:%d", port),
+    );
   }
 
   /**
@@ -243,13 +279,11 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       data.lux,
     );
 
-    // Light sensor — blind_lux recommendation. Null-guard because older
-    // scanner versions may still return without this field.
-    if (data.blind_lux != null) {
-      this.updateLux(data.blind_lux);
-    } else {
-      this.log.warn("[Weather] blind_lux missing in response — skipping lux update");
-    }
+    // Light sensor — blind_lux recommendation from the scanner. Values are
+    // pre-scaled at the source (0 / 1000 / 40000) to be well-separated,
+    // since HomeKit's threshold-automation engine was empirically unreliable
+    // at small magnitudes.
+    this.updateLux(data.blind_lux);
 
     // Indoor module — guard each field so a partial response doesn't crash
     // the poll with a NaN write to HomeKit (which the HAP layer rejects).
