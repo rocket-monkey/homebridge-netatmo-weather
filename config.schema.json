@@ -6,9 +6,22 @@
     "type": "object",
     "properties": {
       "name": {
-        "title": "Accessory Name",
+        "title": "Light Sensor Name",
         "type": "string",
-        "default": "Netatmo Weather"
+        "default": "Netatmo Weather",
+        "description": "Display name for the blind_lux recommendation light sensor"
+      },
+      "indoorName": {
+        "title": "Indoor Module Name",
+        "type": "string",
+        "default": "Netatmo Indoor",
+        "description": "Display name for the indoor module accessory (temp, humidity, CO₂)"
+      },
+      "outdoorName": {
+        "title": "Outdoor Module Name",
+        "type": "string",
+        "default": "Netatmo Outdoor",
+        "description": "Display name for the outdoor module accessory (temp, humidity)"
       },
       "weatherEndpoint": {
         "title": "Weather Endpoint URL",
