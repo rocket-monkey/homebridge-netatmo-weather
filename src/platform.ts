@@ -53,12 +53,17 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   private lightAccessory: PlatformAccessory | undefined;
   private indoorAccessory: PlatformAccessory | undefined;
   private outdoorAccessory: PlatformAccessory | undefined;
+  private co2AlertAccessory: PlatformAccessory | undefined;
 
   // Running-latest values, updated by poll(), read by onGet handlers.
   private currentLux = MIN_LUX;
   private indoorTemp = 0;
   private indoorHumidity = 0;
   private indoorCO2 = 0;
+  // Tracks the last "alert" state so we only fire StatelessProgrammableSwitch
+  // events on the transitions, not on every poll. null until the first poll
+  // gives us a baseline (avoids firing a spurious "back to normal" on startup).
+  private prevCO2Abnormal: boolean | null = null;
   private outdoorTemp = 0;
   private outdoorHumidity = 0;
 
@@ -95,6 +100,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.setupLightAccessory();
       this.setupIndoorAccessory();
       this.setupOutdoorAccessory();
+      this.setupCO2AlertAccessory();
       this.poll();
       this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
 
@@ -143,6 +149,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     const lightUuid = this.api.hap.uuid.generate("netatmo-weather-sensor");
     const indoorUuid = this.api.hap.uuid.generate("netatmo-weather-indoor");
     const outdoorUuid = this.api.hap.uuid.generate("netatmo-weather-outdoor");
+    const co2AlertUuid = this.api.hap.uuid.generate("netatmo-weather-co2-alert");
 
     if (accessory.UUID === lightUuid) {
       this.lightAccessory = accessory;
@@ -150,6 +157,8 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.indoorAccessory = accessory;
     } else if (accessory.UUID === outdoorUuid) {
       this.outdoorAccessory = accessory;
+    } else if (accessory.UUID === co2AlertUuid) {
+      this.co2AlertAccessory = accessory;
     } else {
       // Stale accessory from a prior version (e.g. renamed). Drop it so
       // HomeKit can garbage-collect the tombstone instead of showing it
@@ -218,13 +227,81 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     co2.getCharacteristic(this.Characteristic.CarbonDioxideLevel).onGet(() => this.indoorCO2);
     // HomeKit wants a binary "detected" signal too. 1000 ppm is ASHRAE's
     // upper bound for "well-ventilated" — a reasonable threshold for the
-    // Detected characteristic.
+    // Detected characteristic. Hysteresis is applied in poll() (1000 ↑ /
+    // 800 ↓) so the value doesn't flap when CO₂ hovers at the threshold.
     co2.getCharacteristic(this.Characteristic.CarbonDioxideDetected)
       .onGet(() =>
-        this.indoorCO2 > 1000
+        this.prevCO2Abnormal
           ? this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL
           : this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL,
       );
+
+    // ── Migrate away from prior 1.3.x / 1.4.0 experiments ─────────────
+    // 1.3.x added two StatelessProgrammableSwitch services + ServiceLabel.
+    // 1.4.0 added a MotionSensor as a secondary service on the indoor
+    // accessory — but iOS Home's automation picker hides secondary services
+    // when the accessory's primary type (CO₂ sensor) doesn't match. Those
+    // stale services are stripped here; the dual-direction trigger now lives
+    // on its own accessory in setupCO2AlertAccessory().
+    let dirty = false;
+    for (const subtype of ["co2-high", "co2-normal"] as const) {
+      const stale = this.indoorAccessory.getServiceById(
+        this.Service.StatelessProgrammableSwitch, subtype,
+      );
+      if (stale) {
+        this.indoorAccessory.removeService(stale);
+        dirty = true;
+      }
+    }
+    const staleLabel = this.indoorAccessory.getService(this.Service.ServiceLabel);
+    if (staleLabel) {
+      this.indoorAccessory.removeService(staleLabel);
+      dirty = true;
+    }
+    const staleMotion = this.indoorAccessory.getServiceById(
+      this.Service.MotionSensor, "co2-alert",
+    );
+    if (staleMotion) {
+      this.indoorAccessory.removeService(staleMotion);
+      dirty = true;
+    }
+    if (dirty) {
+      this.log.info("[CO₂] Stripped legacy services from indoor accessory; persisting.");
+      this.api.updatePlatformAccessories([this.indoorAccessory]);
+    }
+  }
+
+  // Dedicated CO₂ alert accessory — a standalone MotionSensor whose
+  // MotionDetected mirrors the hysteresis-driven CO₂ alert state. iOS
+  // Home renders this as a separate sensor in the automation picker and
+  // offers BOTH "Erkennt Bewegung" and "Erkennt keine Bewegung mehr" as
+  // dual-direction triggers — the same UX as a real motion sensor.
+  private setupCO2AlertAccessory(): void {
+    const uuid = this.api.hap.uuid.generate("netatmo-weather-co2-alert");
+    const name = `${this.indoorName} CO₂ Alert`;
+
+    if (!this.co2AlertAccessory) {
+      this.co2AlertAccessory = new this.api.platformAccessory(name, uuid);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [this.co2AlertAccessory]);
+      this.log.info("Registered new accessory: %s", name);
+    }
+
+    this.co2AlertAccessory.getService(this.Service.AccessoryInformation)!
+      .setCharacteristic(this.Characteristic.Manufacturer, "Netatmo")
+      .setCharacteristic(this.Characteristic.Model, "CO₂ Alert (derived)")
+      .setCharacteristic(this.Characteristic.SerialNumber, "NW-CO2-001");
+
+    const hadMotion = !!this.co2AlertAccessory.getService(this.Service.MotionSensor);
+    const motion =
+      this.co2AlertAccessory.getService(this.Service.MotionSensor) ||
+      this.co2AlertAccessory.addService(this.Service.MotionSensor, name);
+    motion.getCharacteristic(this.Characteristic.MotionDetected)
+      .onGet(() => this.prevCO2Abnormal ?? false);
+    if (!hadMotion) {
+      // addService on a newly-registered accessory races the initial cache
+      // write; force a republish so HAP exposes MotionSensor to controllers.
+      this.api.updatePlatformAccessories([this.co2AlertAccessory]);
+    }
   }
 
   private setupOutdoorAccessory(): void {
@@ -307,12 +384,45 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
         this.indoorCO2 = data.indoor.co2;
         const co2Service = this.indoorAccessory?.getService(this.Service.CarbonDioxideSensor);
         co2Service?.updateCharacteristic(this.Characteristic.CarbonDioxideLevel, this.indoorCO2);
+
+        // Hysteresis: cross 1000 upward to enter ABNORMAL, fall below 800
+        // to return to NORMAL. Between 800 and 1000 we hold the previous
+        // state. Avoids flapping notifications when CO₂ sits near the
+        // threshold.
+        let nextAbnormal: boolean;
+        if (this.indoorCO2 > 1000) {
+          nextAbnormal = true;
+        } else if (this.indoorCO2 < 800) {
+          nextAbnormal = false;
+        } else {
+          nextAbnormal = this.prevCO2Abnormal ?? false;
+        }
+
         co2Service?.updateCharacteristic(
           this.Characteristic.CarbonDioxideDetected,
-          this.indoorCO2 > 1000
+          nextAbnormal
             ? this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL
             : this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL,
         );
+
+        // Mirror the alert state onto the dedicated CO₂ Alert accessory's
+        // MotionSensor — iOS Home renders that accessory as a standalone
+        // motion sensor with both "detected" and "no longer detected"
+        // automation triggers.
+        this.co2AlertAccessory
+          ?.getService(this.Service.MotionSensor)
+          ?.updateCharacteristic(this.Characteristic.MotionDetected, nextAbnormal);
+
+        // First poll establishes the baseline silently.
+        if (this.prevCO2Abnormal !== null && this.prevCO2Abnormal !== nextAbnormal) {
+          this.log.info(
+            "[CO₂] Transition %s → %s at %s ppm",
+            this.prevCO2Abnormal ? "ABNORMAL" : "NORMAL",
+            nextAbnormal ? "ABNORMAL" : "NORMAL",
+            this.indoorCO2.toFixed(0),
+          );
+        }
+        this.prevCO2Abnormal = nextAbnormal;
       }
     }
 
