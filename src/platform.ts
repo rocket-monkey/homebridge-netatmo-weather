@@ -64,15 +64,21 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   // events on the transitions, not on every poll. null until the first poll
   // gives us a baseline (avoids firing a spurious "back to normal" on startup).
   private prevCO2Abnormal: boolean | null = null;
-  // Sustain counters for the time-based hysteresis in poll(). Netatmo's
-  // dashboard_data CO₂ field can briefly disagree with the live sensor by
-  // hundreds of ppm during ventilation events (the iOS app shows a fresher
-  // raw value than the API surfaces); without a sustain requirement the
-  // 1-min polling means a single transient spike trips ABNORMAL and the
-  // user gets a false "high CO₂" notification.
+  // Sustain counters + tunable thresholds for the time-based hysteresis
+  // in poll(). The Netatmo Weather Station's CO₂ sensor (NDIR with rolling
+  // self-calibration) emits raw values that diverge wildly from what the
+  // iOS Netatmo app displays — same instant, same sensor, /getmeasure
+  // returns ~1000 while iOS shows ~280. We can't access whatever post-
+  // calibration path iOS uses, so the practical answer is to require BOTH
+  // a higher absolute threshold and a sustained-time count before tripping
+  // the HomeKit "high CO₂ detected" characteristic. Defaults raised from
+  // the original 1000/800 to 1500/1200 — well above the sensor's typical
+  // raw-value noise floor for a normally-occupied office.
   private co2ConsecAbove = 0;
   private co2ConsecBelow = 0;
   private co2AbnormalSamples = 3;
+  private co2AbnormalAt = 1500;
+  private co2NormalAt = 1200;
   private outdoorTemp = 0;
   private outdoorHumidity = 0;
 
@@ -105,6 +111,8 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     );
     this.pollIntervalMs = seconds * 1000;
     this.co2AbnormalSamples = Math.max(1, Number(config.co2AbnormalSamples ?? 3));
+    this.co2AbnormalAt = Math.max(400, Number(config.co2AbnormalAt ?? 1500));
+    this.co2NormalAt = Math.max(400, Number(config.co2NormalAt ?? 1200));
 
     this.api.on("didFinishLaunching", () => {
       this.setupLightAccessory();
@@ -407,10 +415,10 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
         // "high CO₂ detected" push (iOS app shows fresh value, dashboard
         // lags). Sustain requirement filters those out without raising
         // the threshold itself.
-        if (this.indoorCO2 > 1000) {
+        if (this.indoorCO2 > this.co2AbnormalAt) {
           this.co2ConsecAbove++;
           this.co2ConsecBelow = 0;
-        } else if (this.indoorCO2 < 800) {
+        } else if (this.indoorCO2 < this.co2NormalAt) {
           this.co2ConsecBelow++;
           this.co2ConsecAbove = 0;
         } else {

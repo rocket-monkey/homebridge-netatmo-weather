@@ -42,7 +42,21 @@
         "type": "integer",
         "default": 3,
         "minimum": 1,
-        "description": "Number of consecutive polls above 1000 ppm (or below 800 ppm) required before flipping the CarbonDioxideDetected characteristic. Filters transient spikes from Netatmo's dashboard_data which briefly disagree with the live sensor reading during ventilation."
+        "description": "Number of consecutive polls above the abnormal threshold (or below the normal threshold) required before flipping the CarbonDioxideDetected characteristic."
+      },
+      "co2AbnormalAt": {
+        "title": "CO₂ ABNORMAL threshold (ppm)",
+        "type": "integer",
+        "default": 1500,
+        "minimum": 400,
+        "description": "Above this ppm value, accumulate toward ABNORMAL. Default raised from the ASHRAE 1000 ppm guideline because the Netatmo Weather Station's raw CO₂ readings diverge from what the Netatmo iOS app displays (same instant, ~4×). Tune lower if your sensor is well-calibrated."
+      },
+      "co2NormalAt": {
+        "title": "CO₂ NORMAL threshold (ppm)",
+        "type": "integer",
+        "default": 1200,
+        "minimum": 400,
+        "description": "Below this ppm value, accumulate toward NORMAL. Sits below co2AbnormalAt to give a hysteresis band where the previous state is held."
       },
       "debugPort": {
         "title": "Debug HTTP Port",
