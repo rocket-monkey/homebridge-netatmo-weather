@@ -37,6 +37,13 @@
         "minimum": 15,
         "description": "How often to fetch weather data, in seconds"
       },
+      "co2AbnormalSamples": {
+        "title": "CO₂ ABNORMAL sustain samples",
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "description": "Number of consecutive polls above 1000 ppm (or below 800 ppm) required before flipping the CarbonDioxideDetected characteristic. Filters transient spikes from Netatmo's dashboard_data which briefly disagree with the live sensor reading during ventilation."
+      },
       "debugPort": {
         "title": "Debug HTTP Port",
         "type": "integer",

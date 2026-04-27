@@ -64,6 +64,15 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   // events on the transitions, not on every poll. null until the first poll
   // gives us a baseline (avoids firing a spurious "back to normal" on startup).
   private prevCO2Abnormal: boolean | null = null;
+  // Sustain counters for the time-based hysteresis in poll(). Netatmo's
+  // dashboard_data CO₂ field can briefly disagree with the live sensor by
+  // hundreds of ppm during ventilation events (the iOS app shows a fresher
+  // raw value than the API surfaces); without a sustain requirement the
+  // 1-min polling means a single transient spike trips ABNORMAL and the
+  // user gets a false "high CO₂" notification.
+  private co2ConsecAbove = 0;
+  private co2ConsecBelow = 0;
+  private co2AbnormalSamples = 3;
   private outdoorTemp = 0;
   private outdoorHumidity = 0;
 
@@ -95,6 +104,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       MIN_POLL_INTERVAL_SECONDS,
     );
     this.pollIntervalMs = seconds * 1000;
+    this.co2AbnormalSamples = Math.max(1, Number(config.co2AbnormalSamples ?? 3));
 
     this.api.on("didFinishLaunching", () => {
       this.setupLightAccessory();
@@ -385,14 +395,33 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
         const co2Service = this.indoorAccessory?.getService(this.Service.CarbonDioxideSensor);
         co2Service?.updateCharacteristic(this.Characteristic.CarbonDioxideLevel, this.indoorCO2);
 
-        // Hysteresis: cross 1000 upward to enter ABNORMAL, fall below 800
-        // to return to NORMAL. Between 800 and 1000 we hold the previous
-        // state. Avoids flapping notifications when CO₂ sits near the
-        // threshold.
-        let nextAbnormal: boolean;
+        // Two-axis hysteresis: value AND sustained-time.
+        //   value: 1000 ↑ to enter ABNORMAL, 800 ↓ to return to NORMAL,
+        //          800-1000 = hold previous state.
+        //   time:  flip only after `co2AbnormalSamples` consecutive polls
+        //          on the same side. Any sample inside the band resets
+        //          both counters — partial streaks don't accumulate.
+        // Why both: Netatmo's dashboard_data CO₂ briefly diverges from
+        // the live reading by hundreds of ppm during ventilation, and at
+        // 60s polling a single transient spike used to trip a false
+        // "high CO₂ detected" push (iOS app shows fresh value, dashboard
+        // lags). Sustain requirement filters those out without raising
+        // the threshold itself.
         if (this.indoorCO2 > 1000) {
-          nextAbnormal = true;
+          this.co2ConsecAbove++;
+          this.co2ConsecBelow = 0;
         } else if (this.indoorCO2 < 800) {
+          this.co2ConsecBelow++;
+          this.co2ConsecAbove = 0;
+        } else {
+          this.co2ConsecAbove = 0;
+          this.co2ConsecBelow = 0;
+        }
+
+        let nextAbnormal: boolean;
+        if (this.co2ConsecAbove >= this.co2AbnormalSamples) {
+          nextAbnormal = true;
+        } else if (this.co2ConsecBelow >= this.co2AbnormalSamples) {
           nextAbnormal = false;
         } else {
           nextAbnormal = this.prevCO2Abnormal ?? false;
