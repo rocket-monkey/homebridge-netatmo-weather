@@ -23,6 +23,12 @@
         "default": "Netatmo Outdoor",
         "description": "Display name for the outdoor module accessory (temp, humidity)"
       },
+      "bedroomName": {
+        "title": "Bedroom Module Name",
+        "type": "string",
+        "default": "Netatmo Bedroom",
+        "description": "Display name for the optional second indoor module accessory (temp, humidity, CO₂). Only populated when the upstream weather endpoint emits a `bedroom` block."
+      },
       "weatherEndpoint": {
         "title": "Weather Endpoint URL",
         "type": "string",

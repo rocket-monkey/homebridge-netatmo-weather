@@ -7,3 +7,4 @@ export const MIN_LUX = 0.0001;
 
 export const DEFAULT_INDOOR_NAME = "Netatmo Indoor";
 export const DEFAULT_OUTDOOR_NAME = "Netatmo Outdoor";
+export const DEFAULT_BEDROOM_NAME = "Netatmo Bedroom";

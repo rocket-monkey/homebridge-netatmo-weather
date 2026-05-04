@@ -18,6 +18,16 @@ export interface WeatherResponse {
     humidity: number;
     noise: number;
   };
+  // Optional second indoor module (e.g. a Netatmo NIM01-WW Smart Indoor Air
+  // Quality Monitor placed in the bedroom). Same shape as `indoor`. Endpoint
+  // populates this when a second indoor device is registered upstream — the
+  // plugin treats absence as "no second module" and skips that accessory.
+  bedroom?: {
+    temperature: number;
+    co2: number;
+    humidity: number;
+    noise: number;
+  };
   forecast: {
     daily: unknown[];
     hourly: unknown[];

@@ -18,6 +18,7 @@ import {
   MIN_LUX,
   DEFAULT_INDOOR_NAME,
   DEFAULT_OUTDOOR_NAME,
+  DEFAULT_BEDROOM_NAME,
 } from "./settings.js";
 import { WeatherService, WeatherResponse } from "./weatherService.js";
 
@@ -48,12 +49,14 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   private readonly lightName: string;
   private readonly indoorName: string;
   private readonly outdoorName: string;
+  private readonly bedroomName: string;
 
   // Cached accessories (Homebridge restores these across restarts).
   private lightAccessory: PlatformAccessory | undefined;
   private indoorAccessory: PlatformAccessory | undefined;
   private outdoorAccessory: PlatformAccessory | undefined;
   private co2AlertAccessory: PlatformAccessory | undefined;
+  private bedroomAccessory: PlatformAccessory | undefined;
 
   // Running-latest values, updated by poll(), read by onGet handlers.
   private currentLux = MIN_LUX;
@@ -81,6 +84,9 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   private co2NormalAt = 1200;
   private outdoorTemp = 0;
   private outdoorHumidity = 0;
+  private bedroomTemp = 0;
+  private bedroomHumidity = 0;
+  private bedroomCO2 = 0;
 
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -95,6 +101,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     this.lightName = (config.name as string) || "Netatmo Weather";
     this.indoorName = (config.indoorName as string) || DEFAULT_INDOOR_NAME;
     this.outdoorName = (config.outdoorName as string) || DEFAULT_OUTDOOR_NAME;
+    this.bedroomName = (config.bedroomName as string) || DEFAULT_BEDROOM_NAME;
 
     const endpoint = config.weatherEndpoint as string;
     if (!endpoint) {
@@ -119,6 +126,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.setupIndoorAccessory();
       this.setupOutdoorAccessory();
       this.setupCO2AlertAccessory();
+      this.setupBedroomAccessory();
       this.poll();
       this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
 
@@ -168,6 +176,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     const indoorUuid = this.api.hap.uuid.generate("netatmo-weather-indoor");
     const outdoorUuid = this.api.hap.uuid.generate("netatmo-weather-outdoor");
     const co2AlertUuid = this.api.hap.uuid.generate("netatmo-weather-co2-alert");
+    const bedroomUuid = this.api.hap.uuid.generate("netatmo-weather-bedroom");
 
     if (accessory.UUID === lightUuid) {
       this.lightAccessory = accessory;
@@ -177,6 +186,8 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       this.outdoorAccessory = accessory;
     } else if (accessory.UUID === co2AlertUuid) {
       this.co2AlertAccessory = accessory;
+    } else if (accessory.UUID === bedroomUuid) {
+      this.bedroomAccessory = accessory;
     } else {
       // Stale accessory from a prior version (e.g. renamed). Drop it so
       // HomeKit can garbage-collect the tombstone instead of showing it
@@ -351,6 +362,45 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
       .onGet(() => this.outdoorHumidity);
   }
 
+  // Optional second indoor module (e.g. a Netatmo NIM01-WW Smart Indoor Air
+  // Quality Monitor placed in a bedroom). Same Temp + Humidity + CO₂ shape
+  // as the primary indoor accessory, but no separate "alert" accessory —
+  // bedroom CO₂ rarely needs the dual-direction trigger UX, and one alert
+  // sensor in HomeKit is plenty.
+  private setupBedroomAccessory(): void {
+    const uuid = this.api.hap.uuid.generate("netatmo-weather-bedroom");
+
+    if (!this.bedroomAccessory) {
+      this.bedroomAccessory = new this.api.platformAccessory(this.bedroomName, uuid);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [this.bedroomAccessory]);
+      this.log.info("Registered new accessory: %s", this.bedroomName);
+    }
+
+    this.bedroomAccessory.getService(this.Service.AccessoryInformation)!
+      .setCharacteristic(this.Characteristic.Manufacturer, "Netatmo")
+      .setCharacteristic(this.Characteristic.Model, "Indoor Module (bedroom, via cloud)")
+      .setCharacteristic(this.Characteristic.SerialNumber, "NW-BED-001");
+
+    const temp =
+      this.bedroomAccessory.getService(this.Service.TemperatureSensor) ||
+      this.bedroomAccessory.addService(this.Service.TemperatureSensor, `${this.bedroomName} Temp`);
+    temp
+      .getCharacteristic(this.Characteristic.CurrentTemperature)
+      .onGet(() => this.bedroomTemp);
+
+    const humidity =
+      this.bedroomAccessory.getService(this.Service.HumiditySensor) ||
+      this.bedroomAccessory.addService(this.Service.HumiditySensor, `${this.bedroomName} Humidity`);
+    humidity
+      .getCharacteristic(this.Characteristic.CurrentRelativeHumidity)
+      .onGet(() => this.bedroomHumidity);
+
+    const co2 =
+      this.bedroomAccessory.getService(this.Service.CarbonDioxideSensor) ||
+      this.bedroomAccessory.addService(this.Service.CarbonDioxideSensor, `${this.bedroomName} CO₂`);
+    co2.getCharacteristic(this.Characteristic.CarbonDioxideLevel).onGet(() => this.bedroomCO2);
+  }
+
   // ── Poll + update ──────────────────────────────────────────────────
 
   private async poll(): Promise<void> {
@@ -363,13 +413,16 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     }
 
     this.log.info(
-      "[Weather] %s, outdoor %s°C / %s%% RH, indoor %s°C / %s%% RH / %s ppm CO₂, blind_lux %s, lux %s",
+      "[Weather] %s, outdoor %s°C / %s%% RH, indoor %s°C / %s%% RH / %s ppm CO₂, bedroom %s°C / %s%% RH / %s ppm CO₂, blind_lux %s, lux %s",
       data.weather_today,
       data.current?.temperature?.toFixed(1) ?? "?",
       data.current?.humidity?.toFixed(0) ?? "?",
       data.indoor?.temperature?.toFixed(1) ?? "?",
       data.indoor?.humidity?.toFixed(0) ?? "?",
       data.indoor?.co2?.toFixed(0) ?? "?",
+      data.bedroom?.temperature?.toFixed(1) ?? "?",
+      data.bedroom?.humidity?.toFixed(0) ?? "?",
+      data.bedroom?.co2?.toFixed(0) ?? "?",
       data.blind_lux,
       data.lux,
     );
@@ -479,6 +532,33 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
             this.Characteristic.CurrentRelativeHumidity,
             this.outdoorHumidity,
           );
+      }
+    }
+
+    // Bedroom module — optional; the endpoint may emit a `bedroom` block
+    // with the same shape as `indoor`. Guard each field individually so a
+    // partial or stale upstream record doesn't crash the poll.
+    if (data.bedroom) {
+      if (isFiniteNumber(data.bedroom.temperature)) {
+        this.bedroomTemp = data.bedroom.temperature;
+        this.bedroomAccessory
+          ?.getService(this.Service.TemperatureSensor)
+          ?.updateCharacteristic(this.Characteristic.CurrentTemperature, this.bedroomTemp);
+      }
+      if (isFiniteNumber(data.bedroom.humidity)) {
+        this.bedroomHumidity = clampPercent(data.bedroom.humidity);
+        this.bedroomAccessory
+          ?.getService(this.Service.HumiditySensor)
+          ?.updateCharacteristic(
+            this.Characteristic.CurrentRelativeHumidity,
+            this.bedroomHumidity,
+          );
+      }
+      if (isFiniteNumber(data.bedroom.co2)) {
+        this.bedroomCO2 = data.bedroom.co2;
+        this.bedroomAccessory
+          ?.getService(this.Service.CarbonDioxideSensor)
+          ?.updateCharacteristic(this.Characteristic.CarbonDioxideLevel, this.bedroomCO2);
       }
     }
   }
