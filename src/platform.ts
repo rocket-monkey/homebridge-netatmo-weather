@@ -80,8 +80,8 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   private co2ConsecAbove = 0;
   private co2ConsecBelow = 0;
   private co2AbnormalSamples = 3;
-  private co2AbnormalAt = 1500;
-  private co2NormalAt = 1200;
+  private co2AbnormalAt = 1200;
+  private co2NormalAt = 1000;
   private outdoorTemp = 0;
   private outdoorHumidity = 0;
   private bedroomTemp = 0;
@@ -118,8 +118,8 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     );
     this.pollIntervalMs = seconds * 1000;
     this.co2AbnormalSamples = Math.max(1, Number(config.co2AbnormalSamples ?? 3));
-    this.co2AbnormalAt = Math.max(400, Number(config.co2AbnormalAt ?? 1500));
-    this.co2NormalAt = Math.max(400, Number(config.co2NormalAt ?? 1200));
+    this.co2AbnormalAt = Math.max(400, Number(config.co2AbnormalAt ?? 1200));
+    this.co2NormalAt = Math.max(400, Number(config.co2NormalAt ?? 1000));
 
     this.api.on("didFinishLaunching", () => {
       this.setupLightAccessory();
@@ -456,63 +456,6 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
         const co2Service = this.indoorAccessory?.getService(this.Service.CarbonDioxideSensor);
         co2Service?.updateCharacteristic(this.Characteristic.CarbonDioxideLevel, this.indoorCO2);
 
-        // Two-axis hysteresis: value AND sustained-time.
-        //   value: 1000 ↑ to enter ABNORMAL, 800 ↓ to return to NORMAL,
-        //          800-1000 = hold previous state.
-        //   time:  flip only after `co2AbnormalSamples` consecutive polls
-        //          on the same side. Any sample inside the band resets
-        //          both counters — partial streaks don't accumulate.
-        // Why both: Netatmo's dashboard_data CO₂ briefly diverges from
-        // the live reading by hundreds of ppm during ventilation, and at
-        // 60s polling a single transient spike used to trip a false
-        // "high CO₂ detected" push (iOS app shows fresh value, dashboard
-        // lags). Sustain requirement filters those out without raising
-        // the threshold itself.
-        if (this.indoorCO2 > this.co2AbnormalAt) {
-          this.co2ConsecAbove++;
-          this.co2ConsecBelow = 0;
-        } else if (this.indoorCO2 < this.co2NormalAt) {
-          this.co2ConsecBelow++;
-          this.co2ConsecAbove = 0;
-        } else {
-          this.co2ConsecAbove = 0;
-          this.co2ConsecBelow = 0;
-        }
-
-        let nextAbnormal: boolean;
-        if (this.co2ConsecAbove >= this.co2AbnormalSamples) {
-          nextAbnormal = true;
-        } else if (this.co2ConsecBelow >= this.co2AbnormalSamples) {
-          nextAbnormal = false;
-        } else {
-          nextAbnormal = this.prevCO2Abnormal ?? false;
-        }
-
-        co2Service?.updateCharacteristic(
-          this.Characteristic.CarbonDioxideDetected,
-          nextAbnormal
-            ? this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL
-            : this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL,
-        );
-
-        // Mirror the alert state onto the dedicated CO₂ Alert accessory's
-        // MotionSensor — iOS Home renders that accessory as a standalone
-        // motion sensor with both "detected" and "no longer detected"
-        // automation triggers.
-        this.co2AlertAccessory
-          ?.getService(this.Service.MotionSensor)
-          ?.updateCharacteristic(this.Characteristic.MotionDetected, nextAbnormal);
-
-        // First poll establishes the baseline silently.
-        if (this.prevCO2Abnormal !== null && this.prevCO2Abnormal !== nextAbnormal) {
-          this.log.info(
-            "[CO₂] Transition %s → %s at %s ppm",
-            this.prevCO2Abnormal ? "ABNORMAL" : "NORMAL",
-            nextAbnormal ? "ABNORMAL" : "NORMAL",
-            this.indoorCO2.toFixed(0),
-          );
-        }
-        this.prevCO2Abnormal = nextAbnormal;
       }
     }
 
@@ -561,6 +504,76 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
           ?.updateCharacteristic(this.Characteristic.CarbonDioxideLevel, this.bedroomCO2);
       }
     }
+
+    // CO₂ alert runs once per poll AFTER both rooms are read, on the worse
+    // of the two fresh values. Mornings are the point of this alarm and the
+    // bedroom is where the air goes bad overnight: living-room station
+    // peaked 500–1200 ppm while the bedroom hit 1500–2000 (Sep/Oct 2026), so
+    // an indoor-only alarm fired once in three weeks.
+    const fresh: Array<[string, number]> = [];
+    if (isFiniteNumber(data.indoor?.co2)) fresh.push([this.indoorName, data.indoor!.co2 as number]);
+    if (isFiniteNumber(data.bedroom?.co2)) fresh.push([this.bedroomName, data.bedroom!.co2 as number]);
+    if (fresh.length) this.evaluateCO2Alert(fresh);
+  }
+
+  // Two-axis hysteresis: value AND sustained-time.
+  //   value: above co2AbnormalAt (default 1200) to enter ABNORMAL, below
+  //          co2NormalAt (default 1000) to return to NORMAL, in between =
+  //          hold previous state. 1000 ppm is the classic hygiene limit
+  //          (Pettenkofer / German UBA "auffällig" band starts there).
+  //   time:  flip only after `co2AbnormalSamples` consecutive polls on the
+  //          same side. Any sample inside the band resets both counters.
+  // The old 1500/1200 defaults compensated for a ~4× CO₂ overread that came
+  // from /getmeasure buckets; the scanner switched to dashboard_data on
+  // 2026-04-27 (matches the Netatmo app), so the inflation is gone.
+  private evaluateCO2Alert(readings: Array<[string, number]>): void {
+    const [where, worst] = readings.reduce((a, b) => (b[1] > a[1] ? b : a));
+    if (worst > this.co2AbnormalAt) {
+      this.co2ConsecAbove++;
+      this.co2ConsecBelow = 0;
+    } else if (worst < this.co2NormalAt) {
+      this.co2ConsecBelow++;
+      this.co2ConsecAbove = 0;
+    } else {
+      this.co2ConsecAbove = 0;
+      this.co2ConsecBelow = 0;
+    }
+
+    let nextAbnormal: boolean;
+    if (this.co2ConsecAbove >= this.co2AbnormalSamples) {
+      nextAbnormal = true;
+    } else if (this.co2ConsecBelow >= this.co2AbnormalSamples) {
+      nextAbnormal = false;
+    } else {
+      nextAbnormal = this.prevCO2Abnormal ?? false;
+    }
+
+    this.indoorAccessory
+      ?.getService(this.Service.CarbonDioxideSensor)
+      ?.updateCharacteristic(
+        this.Characteristic.CarbonDioxideDetected,
+        nextAbnormal
+          ? this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL
+          : this.Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL,
+      );
+
+    // Mirror onto the dedicated CO₂ Alert accessory's MotionSensor — iOS
+    // Home offers both "detected" and "no longer detected" as triggers.
+    this.co2AlertAccessory
+      ?.getService(this.Service.MotionSensor)
+      ?.updateCharacteristic(this.Characteristic.MotionDetected, nextAbnormal);
+
+    // First poll establishes the baseline silently.
+    if (this.prevCO2Abnormal !== null && this.prevCO2Abnormal !== nextAbnormal) {
+      this.log.info(
+        "[CO₂] Transition %s → %s at %s ppm (%s)",
+        this.prevCO2Abnormal ? "ABNORMAL" : "NORMAL",
+        nextAbnormal ? "ABNORMAL" : "NORMAL",
+        worst.toFixed(0),
+        where,
+      );
+    }
+    this.prevCO2Abnormal = nextAbnormal;
   }
 
   private updateLux(lux: number): void {
