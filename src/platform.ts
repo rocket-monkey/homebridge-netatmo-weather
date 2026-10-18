@@ -521,8 +521,12 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
   //          co2NormalAt (default 1000) to return to NORMAL, in between =
   //          hold previous state. 1000 ppm is the classic hygiene limit
   //          (Pettenkofer / German UBA "auffällig" band starts there).
-  //   time:  flip only after `co2AbnormalSamples` consecutive polls on the
-  //          same side. Any sample inside the band resets both counters.
+  //   time:  ABNORMAL only after `co2AbnormalSamples` consecutive polls
+  //          above; NORMAL on the first poll below (the 1000/1200 band is
+  //          the hysteresis, and the polls re-read the same 10-min Netatmo
+  //          cloud value, so waiting 3 of them only added 2 min of red lamp
+  //          after the air was already good). Any sample inside the band
+  //          resets both counters.
   // The old 1500/1200 defaults compensated for a ~4× CO₂ overread that came
   // from /getmeasure buckets; the scanner switched to dashboard_data on
   // 2026-04-27 (matches the Netatmo app), so the inflation is gone.
@@ -542,7 +546,7 @@ export class NetatmoWeatherPlatform implements DynamicPlatformPlugin {
     let nextAbnormal: boolean;
     if (this.co2ConsecAbove >= this.co2AbnormalSamples) {
       nextAbnormal = true;
-    } else if (this.co2ConsecBelow >= this.co2AbnormalSamples) {
+    } else if (this.co2ConsecBelow >= 1) {
       nextAbnormal = false;
     } else {
       nextAbnormal = this.prevCO2Abnormal ?? false;
